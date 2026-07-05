@@ -24,7 +24,8 @@ RUN mkdir -p /tmp/c7dc_pdfs /app/cache
 ENV PORT=8080 \
     CACHE_TTL_MINUTES=30 \
     CACHE_DIR=/app/cache \
-    OUTPUT_DIR=/tmp/c7dc_pdfs
+    OUTPUT_DIR=/tmp/c7dc_pdfs \
+    FETCH_DELAY=1
 
 EXPOSE 8080
 

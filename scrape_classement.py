@@ -10,6 +10,7 @@ Usage:
 
 import argparse
 import json
+import os
 import re
 import sys
 import textwrap
@@ -30,7 +31,7 @@ from matplotlib.ticker import FuncFormatter
 # ── Constantes ───────────────────────────────────────────────────────────────
 
 BASE_URL   = "https://c7dc.ffaviron.fr/classement/epreuves"
-FETCH_DELAY = 1
+FETCH_DELAY = float(os.environ.get("FETCH_DELAY", "1"))
 DOC_TITLE  = "Analyseur de performance C7DC et axes de progression"
 
 # Filtre des outliers dans les graphiques.

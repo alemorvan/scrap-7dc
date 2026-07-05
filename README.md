@@ -70,17 +70,20 @@ docker run -p 8080:8080 c7dc-app
 
 ### Variables d'environnement
 
-| Variable | Défaut | Description |
-|---|---|---|
-| `PORT` | `8080` | Port d'écoute |
-| `CACHE_TTL_MINUTES` | `30` | Durée de vie du cache en minutes |
-| `CACHE_DIR` | `/app/cache` | Répertoire des fichiers JSON de cache |
-| `OUTPUT_DIR` | `/tmp/c7dc_pdfs` | Répertoire temporaire des PDF générés |
+| Variable | Défaut Docker | Défaut local | Description |
+|---|---|---|---|
+| `PORT` | `8080` | `8080` | Port d'écoute |
+| `CACHE_TTL_MINUTES` | `30` | `30` | Durée de vie du cache en minutes |
+| `CACHE_DIR` | `/app/cache` | `./cache` | Répertoire des fichiers JSON de cache |
+| `OUTPUT_DIR` | `/tmp/c7dc_pdfs` | `/tmp/c7dc_pdfs` | Répertoire temporaire des PDF générés |
+| `FETCH_DELAY` | `0` | `1` | Délai en secondes entre chaque requête vers c7dc.ffaviron.fr |
 
-Exemple avec TTL personnalisé :
+`FETCH_DELAY=0` est recommandé en production (Render, Railway…) pour accélérer le warmup. Par défaut à `1` pour ménager le serveur C7DC lors des tests locaux répétés.
+
+Exemple :
 
 ```bash
-docker run -p 8080:8080 -e CACHE_TTL_MINUTES=60 c7dc-app
+docker run -p 8080:8080 -e FETCH_DELAY=0 -e CACHE_TTL_MINUTES=60 c7dc-app
 ```
 
 ---
