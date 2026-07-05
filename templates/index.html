@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>C7DC — Analyseur de Performance</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+  <style>
+    :root {
+      --navy:  #1B3F7A;
+      --blue:  #2E75B6;
+      --light: #F4F8FE;
+      --red:   #D62728;
+      --gold:  #E87722;
+      --grid:  #D0E6F5;
+      --green: #28a745;
+    }
+
+    body { background: var(--light); font-family: system-ui, -apple-system, sans-serif; }
+
+    /* Header */
+    .c7dc-header { background: var(--navy); color: #fff; padding: 2.2rem 1rem 1.8rem; text-align: center; }
+    .c7dc-header h1 { font-size: 1.9rem; font-weight: 700; margin: 0 0 .35rem; }
+    .c7dc-header p  { margin: 0; opacity: .72; font-size: .9rem; }
+    .c7dc-accent    { height: 4px; background: linear-gradient(90deg, var(--blue), var(--red)); }
+
+    /* Mode tabs */
+    .mode-tabs { display: flex; gap: .5rem; justify-content: center; margin: 1.8rem 0 1.2rem; }
+    .mode-tab  {
+      padding: .5rem 1.4rem; border-radius: 24px; border: 2px solid var(--grid);
+      background: #fff; font-weight: 600; font-size: .9rem; cursor: pointer;
+      color: #7F8C8D; transition: all .15s;
+    }
+    .mode-tab.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+    .mode-tab:hover:not(.active) { border-color: var(--blue); color: var(--blue); }
+
+    /* Search */
+    .search-wrapper { max-width: 640px; margin: 0 auto; }
+    .search-wrapper .form-control {
+      border-color: var(--grid); border-radius: 12px 0 0 12px;
+      font-size: 1.05rem; padding: .6rem 1rem; background: #fff;
+      box-shadow: 0 2px 8px rgba(30,60,120,.07);
+    }
+    .search-wrapper .form-control:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(46,117,182,.18); }
+    .search-wrapper .btn-search {
+      background: var(--blue); border: none; border-radius: 0 12px 12px 0;
+      color: #fff; font-weight: 600; padding: .6rem 1.3rem;
+    }
+    .search-wrapper .btn-search:hover { background: var(--navy); }
+    #searchStatus { min-height: 1.4em; font-size: .82rem; color: #7F8C8D; margin-top: .4rem; text-align: center; }
+
+    /* Cards */
+    #results { max-width: 700px; margin: 1.4rem auto 3rem; }
+
+    .participant-card, .club-card, .member-card {
+      background: #fff; border: 1px solid var(--grid); border-radius: 12px;
+      margin-bottom: .65rem; box-shadow: 0 2px 8px rgba(30,60,120,.05);
+      transition: box-shadow .15s;
+    }
+    .participant-card:hover, .club-card:hover { box-shadow: 0 4px 16px rgba(30,60,120,.12); }
+
+    .card-row { display: flex; align-items: center; gap: .75rem; padding: .9rem 1.1rem; }
+    .card-info { flex: 1; min-width: 0; }
+    .card-name { font-weight: 700; font-size: 1rem; color: var(--navy); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .card-sub  { font-size: .78rem; color: #7F8C8D; }
+
+    /* Club members sub-panel */
+    .members-panel {
+      border-top: 1px solid var(--grid); padding: .5rem .75rem .75rem;
+      background: #f7faff; border-radius: 0 0 12px 12px;
+      display: none;
+    }
+    .members-panel.open { display: block; }
+    .members-panel h6 { font-size: .82rem; font-weight: 700; color: var(--navy); margin: .4rem 0 .5rem; }
+
+    .member-card {
+      display: flex; align-items: center; gap: .6rem;
+      padding: .55rem .8rem; margin-bottom: .35rem; border-radius: 8px;
+    }
+    .member-rank {
+      min-width: 2rem; font-size: .78rem; font-weight: 700;
+      color: var(--blue); text-align: right; flex-shrink: 0;
+    }
+    .member-name  { flex: 1; font-size: .88rem; font-weight: 600; color: #1C2833; }
+    .member-score { font-size: .78rem; color: #7F8C8D; white-space: nowrap; }
+
+    /* Buttons */
+    .btn-action {
+      border: none; border-radius: 8px; color: #fff; font-size: .8rem;
+      font-weight: 600; padding: .4rem .85rem; white-space: nowrap; flex-shrink: 0; cursor: pointer;
+    }
+    .btn-generate  { background: var(--blue); }
+    .btn-generate:hover:not(:disabled) { background: var(--navy); }
+    .btn-generate:disabled { opacity: .55; cursor: not-allowed; }
+    .btn-view      { background: var(--gold); }
+    .btn-view:hover { background: #c96319; }
+    .btn-view.loading { opacity: .65; cursor: wait; }
+
+    /* Job progress */
+    .job-status {
+      padding: .65rem 1.1rem; border-top: 1px solid var(--grid);
+      font-size: .83rem;
+    }
+    .job-status .spinner-border { width: .95rem; height: .95rem; border-width: 2px; }
+    .step-text { color: var(--blue); }
+    .btn-dl {
+      background: var(--green); border: none; border-radius: 8px; color: #fff;
+      font-size: .88rem; font-weight: 600; padding: .45rem 1rem; text-decoration: none; display: inline-block;
+    }
+    .btn-dl:hover { background: #1e7e34; color: #fff; }
+
+    /* Disambiguation */
+    .disambig-panel {
+      background: #fff7ec; border: 1px solid #ffd5a0; border-radius: 8px;
+      padding: .6rem .9rem; margin-top: .5rem; font-size: .82rem;
+    }
+    .disambig-panel p { margin: 0 0 .4rem; font-weight: 600; color: var(--gold); }
+    .disambig-btn {
+      display: block; width: 100%; text-align: left; padding: .3rem .5rem;
+      background: none; border: 1px solid var(--grid); border-radius: 6px;
+      margin-bottom: .3rem; cursor: pointer; font-size: .82rem;
+    }
+    .disambig-btn:hover { background: var(--light); }
+
+    /* Empty / Loading */
+    .empty-state { text-align: center; padding: 2.5rem 1rem; color: #7F8C8D; }
+    .spinner-lg  { width: 2rem; height: 2rem; }
+
+    footer { text-align: center; font-size: .78rem; color: #aaa; padding: 1.5rem; border-top: 1px solid var(--grid); margin-top: 2rem; }
+  </style>
+</head>
+<body>
+
+<header class="c7dc-header">
+  <h1>⚡ C7DC — Analyseur de Performance</h1>
+  <p>Challenge des 7 Défis Capitaux</p>
+</header>
+<div class="c7dc-accent"></div>
+
+<div class="container">
+
+  <!-- Onglets de mode -->
+  <div class="mode-tabs">
+    <button class="mode-tab active" id="tabIndiv" onclick="setMode('individuel')">🚣 Recherche individuelle</button>
+    <button class="mode-tab"        id="tabClub"  onclick="setMode('club')">🏆 Recherche par club</button>
+  </div>
+
+  <!-- Barre de recherche -->
+  <div class="search-wrapper">
+    <div class="input-group">
+      <input type="search" id="searchInput" class="form-control"
+             placeholder="Rechercher un participant (ex : DUPONT)…"
+             autocomplete="off" autofocus>
+      <button class="btn-search" onclick="doSearch()">🔍&nbsp;Rechercher</button>
+    </div>
+    <div id="searchStatus"></div>
+  </div>
+
+  <!-- Résultats -->
+  <div id="results">
+    <div class="empty-state"><p>Entrez un nom pour lancer la recherche.</p></div>
+  </div>
+
+</div>
+
+<footer>
+  Application <strong>non officielle</strong>, sans lien avec la Fédération Française d'Aviron ni avec les organisateurs du Challenge des 7 Défis Capitaux. ·
+  Données issues de <a href="https://c7dc.ffaviron.fr" target="_blank">c7dc.ffaviron.fr</a> ·
+  <a href="https://github.com/alemorvan/crap-7dc" target="_blank">Code source (GitHub)</a> ·
+  Licence <a href="https://creativecommons.org/licenses/by-sa/4.0/deed.fr" target="_blank">CC BY-SA 4.0</a>
+</footer>
+
+<script>
+// ── État ──────────────────────────────────────────────────────────────────────
+let _mode = 'individuel';  // 'individuel' | 'club'
+let _searchTimeout = null;
+
+// ── Mode ──────────────────────────────────────────────────────────────────────
+function setMode(mode) {
+  _mode = mode;
+  document.getElementById('tabIndiv').classList.toggle('active', mode === 'individuel');
+  document.getElementById('tabClub').classList.toggle('active', mode === 'club');
+  const input = document.getElementById('searchInput');
+  input.placeholder = mode === 'individuel'
+    ? 'Rechercher un participant (ex : DUPONT)…'
+    : 'Rechercher un club (ex : RENNES, BELBEUF)…';
+  input.value = '';
+  document.getElementById('searchStatus').textContent = '';
+  document.getElementById('results').innerHTML = emptyState('Entrez un nom pour lancer la recherche.');
+  input.focus();
+}
+
+// ── Recherche ─────────────────────────────────────────────────────────────────
+document.getElementById('searchInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { clearTimeout(_searchTimeout); doSearch(); }
+});
+document.getElementById('searchInput').addEventListener('input', () => {
+  clearTimeout(_searchTimeout);
+  _searchTimeout = setTimeout(doSearch, 380);
+});
+
+async function doSearch() {
+  const q = document.getElementById('searchInput').value.trim();
+  if (q.length < 2) {
+    setStatus('');
+    document.getElementById('results').innerHTML = emptyState('Entrez au moins 2 caractères.');
+    return;
+  }
+  setStatus('⌛ Recherche…');
+  if (_mode === 'individuel') await searchIndividuel(q);
+  else                         await searchClub(q);
+}
+
+// ── Mode Individuel ───────────────────────────────────────────────────────────
+async function searchIndividuel(q) {
+  const data = await apiFetch('/api/search?q=' + enc(q));
+  if (!data) return;
+  if (data.error) { setStatus('❌ ' + data.error); return; }
+  if (data.length === 0) {
+    setStatus('Aucun résultat pour « ' + q + ' »');
+    showResults(emptyState('Aucun participant trouvé.<br>Vérifiez l\'orthographe ou essayez le nom de famille seul.'));
+    return;
+  }
+  setStatus(data.length + ' résultat' + (data.length > 1 ? 's' : ''));
+  showResults('');
+  const container = document.getElementById('results');
+  data.forEach(p => container.appendChild(makeParticipantCard(p)));
+}
+
+function makeParticipantCard(p) {
+  const wrap = document.createElement('div');
+  wrap.className = 'participant-card';
+
+  const row = document.createElement('div');
+  row.className = 'card-row';
+
+  const info = el('div', 'card-info', `
+    <div class="card-name">${esc(p.nom)}</div>
+    <div class="card-sub">${esc(p.categorie || '—')}</div>
+  `);
+
+  const btn = document.createElement('button');
+  btn.className = 'btn-action btn-generate';
+  btn.textContent = '📊 Générer le rapport';
+
+  const statusDiv = document.createElement('div');
+  statusDiv.className = 'job-status';
+  statusDiv.style.display = 'none';
+
+  btn.addEventListener('click', () => startGeneration(btn, p.nom, p.categorie || '', statusDiv));
+
+  row.appendChild(info);
+  row.appendChild(btn);
+  wrap.appendChild(row);
+  wrap.appendChild(statusDiv);
+  return wrap;
+}
+
+// ── Mode Club ─────────────────────────────────────────────────────────────────
+async function searchClub(q) {
+  const data = await apiFetch('/api/clubs?q=' + enc(q));
+  if (!data) return;
+  if (data.error) { setStatus('❌ ' + data.error); return; }
+  if (data.length === 0) {
+    setStatus('Aucun club trouvé pour « ' + q + ' »');
+    showResults(emptyState('Aucun club trouvé.<br>Essayez avec une partie du nom (ex : RENNES, AVIR…)'));
+    return;
+  }
+  setStatus(data.length + ' club' + (data.length > 1 ? 's' : '') + ' trouvé' + (data.length > 1 ? 's' : ''));
+  showResults('');
+  const container = document.getElementById('results');
+  data.forEach(c => container.appendChild(makeClubCard(c)));
+}
+
+function makeClubCard(club) {
+  const wrap = document.createElement('div');
+  wrap.className = 'club-card';
+
+  const row = document.createElement('div');
+  row.className = 'card-row';
+
+  const info = el('div', 'card-info', `
+    <div class="card-name">${esc(club.nom)}</div>
+    <div class="card-sub">#${club.rang} · ${esc(club.points)} pts</div>
+  `);
+
+  const btn = document.createElement('button');
+  btn.className = 'btn-action btn-view';
+  btn.textContent = '👥 Voir les membres';
+
+  const panel = document.createElement('div');
+  panel.className = 'members-panel';
+
+  btn.addEventListener('click', () => toggleMembers(btn, panel, club));
+
+  row.appendChild(info);
+  row.appendChild(btn);
+  wrap.appendChild(row);
+  wrap.appendChild(panel);
+  return wrap;
+}
+
+async function toggleMembers(btn, panel, club) {
+  if (panel.classList.contains('open')) {
+    panel.classList.remove('open');
+    btn.textContent = '👥 Voir les membres';
+    return;
+  }
+
+  btn.classList.add('loading');
+  btn.textContent = '⌛ Chargement…';
+
+  const data = await apiFetch(`/api/club_members/${club.club_id}?season_id=${club.season_id}`);
+  btn.classList.remove('loading');
+
+  if (!data || data.error) {
+    btn.textContent = '❌ Erreur';
+    return;
+  }
+
+  panel.innerHTML = '';
+  const title = el('h6', '', `👥 ${esc(data.club_nom)} — ${data.members.length} membre(s)`);
+  panel.appendChild(title);
+
+  data.members.forEach(m => {
+    const card = document.createElement('div');
+    card.className = 'member-card';
+
+    const rankEl = el('div', 'member-rank', `#${m.rang}`);
+    const nameEl = el('div', 'member-name', esc(m.nom));
+    const scoreEl = el('div', 'member-score', `${esc(m.total)} pts · ${esc(m.defis)} défis`);
+
+    const genBtn = document.createElement('button');
+    genBtn.className = 'btn-action btn-generate';
+    genBtn.style.fontSize = '.76rem';
+    genBtn.style.padding = '.3rem .7rem';
+    genBtn.textContent = '📊';
+    genBtn.title = 'Générer le rapport';
+
+    const statusDiv = document.createElement('div');
+    statusDiv.style.cssText = 'font-size:.78rem; margin-top:.35rem; padding: 0 .3rem;';
+
+    genBtn.addEventListener('click', () => resolveAndGenerate(genBtn, m.nom, statusDiv));
+
+    card.appendChild(rankEl);
+    card.appendChild(nameEl);
+    card.appendChild(scoreEl);
+    card.appendChild(genBtn);
+
+    const memberWrap = document.createElement('div');
+    memberWrap.appendChild(card);
+    memberWrap.appendChild(statusDiv);
+    panel.appendChild(memberWrap);
+  });
+
+  panel.classList.add('open');
+  btn.textContent = '✕ Fermer';
+}
+
+// ── Résolution nom tronqué → rapport ─────────────────────────────────────────
+async function resolveAndGenerate(btn, nomTronque, statusDiv) {
+  // "Christophe LET." → "Christophe LET"
+  const query = nomTronque.replace(/\.$/, '').trim();
+  btn.disabled = true;
+  statusDiv.textContent = '🔍 Recherche…';
+
+  const data = await apiFetch('/api/search?q=' + enc(query));
+
+  if (!data || data.error) {
+    statusDiv.innerHTML = `<span style="color:red">❌ Erreur réseau</span>`;
+    btn.disabled = false;
+    return;
+  }
+
+  if (data.length === 0) {
+    statusDiv.innerHTML = `<span style="color:#E87722">⚠ Participant introuvable (nom tronqué). <a href="#" onclick="switchIndivSearch('${esc(query)}');return false">Recherche manuelle</a></span>`;
+    btn.disabled = false;
+    return;
+  }
+
+  if (data.length === 1) {
+    // Correspondance unique → génération directe
+    const match = data[0];
+    statusDiv.textContent = `✓ ${match.nom}`;
+    startGeneration(btn, match.nom, match.categorie || '', statusDiv);
+    return;
+  }
+
+  // Plusieurs correspondances → disambiguation
+  statusDiv.innerHTML = '';
+  const box = document.createElement('div');
+  box.className = 'disambig-panel';
+  box.innerHTML = `<p>⚠ Plusieurs participants possibles :</p>`;
+  data.forEach(p => {
+    const b = document.createElement('button');
+    b.className = 'disambig-btn';
+    b.textContent = `${p.nom}  (${p.categorie || '?'})`;
+    b.addEventListener('click', () => {
+      box.remove();
+      statusDiv.textContent = `✓ ${p.nom}`;
+      startGeneration(btn, p.nom, p.categorie || '', statusDiv);
+    });
+    box.appendChild(b);
+  });
+  statusDiv.appendChild(box);
+  btn.disabled = false;
+}
+
+function switchIndivSearch(query) {
+  setMode('individuel');
+  document.getElementById('searchInput').value = query;
+  doSearch();
+}
+
+// ── Génération PDF ────────────────────────────────────────────────────────────
+async function startGeneration(btn, nom, categorie, statusDiv) {
+  btn.disabled = true;
+  btn.textContent = '⏳';
+  statusDiv.style.display = 'block';
+  showStep(statusDiv, 'Démarrage…');
+
+  const data = await apiFetch('/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ nom, categorie }),
+  });
+
+  if (!data || data.error) {
+    showError(statusDiv, btn, data?.error || 'Erreur réseau');
+    return;
+  }
+
+  pollJob(data.job_id, btn, statusDiv);
+}
+
+function pollJob(jobId, btn, statusDiv) {
+  const timer = setInterval(async () => {
+    const job = await apiFetch('/api/status/' + jobId);
+    if (!job) return;
+    if (job.status === 'done') {
+      clearInterval(timer);
+      btn.textContent = '✅';
+      statusDiv.style.display = 'block';
+      statusDiv.innerHTML = `
+        <div class="d-flex align-items-center gap-2 flex-wrap py-1">
+          <span class="text-success fw-semibold" style="font-size:.82rem">✅ Prêt !</span>
+          <a class="btn-dl" style="font-size:.8rem;padding:.35rem .9rem"
+             href="/api/download/${jobId}" download="${esc(job.filename || 'rapport.pdf')}">
+            ⬇️ Télécharger
+          </a>
+        </div>`;
+    } else if (job.status === 'error') {
+      clearInterval(timer);
+      showError(statusDiv, btn, job.error || 'Erreur inconnue');
+    } else {
+      showStep(statusDiv, job.step || '…');
+    }
+  }, 2000);
+}
+
+// ── Utilitaires ───────────────────────────────────────────────────────────────
+async function apiFetch(url, opts) {
+  try {
+    const r = await fetch(url, opts);
+    return await r.json();
+  } catch (_) { return null; }
+}
+
+function showStep(el, msg) {
+  el.style.display = 'block';
+  el.innerHTML = `<div class="d-flex align-items-center gap-2">
+    <span class="spinner-border text-primary" style="width:.9rem;height:.9rem;border-width:2px"></span>
+    <span class="step-text">${esc(msg)}</span></div>`;
+}
+
+function showError(el, btn, msg) {
+  el.style.display = 'block';
+  el.innerHTML = `<span class="text-danger" style="font-size:.82rem">❌ ${esc(msg)}</span>`;
+  if (btn) { btn.disabled = false; btn.textContent = '📊'; }
+}
+
+function setStatus(msg) { document.getElementById('searchStatus').textContent = msg; }
+function showResults(html) { document.getElementById('results').innerHTML = html; }
+function emptyState(msg) { return `<div class="empty-state"><p>${msg}</p></div>`; }
+function enc(s) { return encodeURIComponent(s); }
+function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function el(tag, cls, html) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (html) e.innerHTML = html;
+  return e;
+}
+</script>
+</body>
+</html>

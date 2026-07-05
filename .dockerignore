@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.pyc
+.git/
+*.pdf
+compare_equipe.py
+.env
+cache/
+analysis_*.json
+classements_*.json

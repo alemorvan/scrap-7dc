@@ -1,0 +1,7 @@
+requests
+beautifulsoup4
+matplotlib
+numpy
+flask
+gunicorn
+anthropic
