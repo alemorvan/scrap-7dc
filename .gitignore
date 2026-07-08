@@ -1,0 +1,15 @@
+venv/
+__pycache__/
+*.pyc
+.env
+cache/
+
+# Sorties de scraping / rapports générés (contiennent des données nominatives)
+classements*.json
+classements*.pdf
+analysis_*.json
+
+# Données d'entraînement ML (noms réels des participants) et sorties de travail —
+# seul models/c7dc_model_params.json (statistiques agrégées, anonymisé) est versionné.
+ml/data/
+ml/output/

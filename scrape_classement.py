@@ -21,6 +21,8 @@ import numpy as np
 import requests
 from bs4 import BeautifulSoup
 
+import predict_ml
+
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -298,15 +300,26 @@ def compute_analysis(event_data, nom_lower):
         else:
             improvement_pct = 0.0
 
-        # Score d'opportunité brut
-        raw = (
-            density_5 * 4.0 +                      # densité proche = gains immédiats
-            max(0.0, 50 - current_pct) * 0.8 +     # marge de progression (bas % = plus de potentiel)
-            max(0.0, 8 - improvement_pct) * 5.0    # petit effort requis = meilleure opportunité
-        )
-        # Ajusté par la difficulté relative : épreuves longues favorisées
-        effort  = EFFORT_MULTIPLIER.get(label, 1.5)
-        opp     = raw / effort
+        # Déjà 1er de sa catégorie : il n'y a plus de place à gagner, donc
+        # plus aucune "opportunité" possible, quel que soit le calcul brut.
+        # Sans ce cas particulier, la formule ci-dessous confond "0%
+        # d'amélioration nécessaire" (moins d'effort = mieux) avec "déjà au
+        # maximum, aucun gain possible" — ce qui la faisait ressortir comme
+        # priorité n°1 alors qu'il n'y a rien à recommander.
+        is_first = (user_rank == 1)
+
+        if is_first:
+            opp = 0.0
+        else:
+            # Score d'opportunité brut
+            raw = (
+                density_5 * 4.0 +                      # densité proche = gains immédiats
+                max(0.0, 50 - current_pct) * 0.8 +     # marge de progression (bas % = plus de potentiel)
+                max(0.0, 8 - improvement_pct) * 5.0    # petit effort requis = meilleure opportunité
+            )
+            # Ajusté par la difficulté relative : épreuves longues favorisées
+            effort = EFFORT_MULTIPLIER.get(label, 1.5)
+            opp    = raw / effort
 
         results.append({
             "label":           label,
@@ -317,6 +330,7 @@ def compute_analysis(event_data, nom_lower):
             "density_5pct":    density_5,
             "improvement_pct": improvement_pct,
             "opportunity":     opp,
+            "is_first":        is_first,
         })
 
     return sorted(results, key=lambda x: x["opportunity"], reverse=True)
@@ -327,7 +341,12 @@ def _build_recs(analysis, total_points):
     recs = []
     best  = max(analysis, key=lambda x: x["current_pct"])
     worst = min(analysis, key=lambda x: x["current_pct"])
-    top   = analysis[0]
+
+    # Une épreuve où l'athlète est déjà 1er n'est plus une "opportunité" :
+    # il n'y a personne devant, donc rien à gagner en places. On l'exclut
+    # des recommandations de progression, et on la félicite séparément.
+    improvable = [a for a in analysis if not a["is_first"]]
+    firsts     = [a for a in analysis if a["is_first"]]
 
     # 1. Bilan global
     recs.append((
@@ -339,27 +358,47 @@ def _build_recs(analysis, total_points):
         f"({worst['current_pct']:.0f}%, rang {worst['user_rank']}/{worst['total']})."
     ))
 
-    # 2. Priorité 1 — gain rapide (densité élevée)
-    a = top
-    gains = min(10, a["density_5pct"])
-    recs.append((
-        f"Priorité n°1 — {a['label']} (gain rapide de points)",
-        f"{a['density_5pct']} concurrent(s) se trouvent dans un écart de 5% "
-        f"juste au-dessus de toi (rang {a['user_rank']}/{a['total']}, score {a['current_pct']:.0f}%). "
-        f"Avec seulement {a['improvement_pct']:.1f}% d'amélioration, tu gagnerais ~10 places "
-        f"et jusqu'à {gains} points bonus supplémentaires. "
-        f"C'est l'épreuve avec le meilleur retour sur investissement à l'entraînement."
-    ))
-
-    # 3. Priorité 2
-    if len(analysis) > 1:
-        a2 = analysis[1]
+    # 2. Priorité 1 — gain rapide (densité élevée), parmi les épreuves
+    # encore améliorables uniquement.
+    if improvable:
+        a = improvable[0]
+        gains = min(10, a["density_5pct"])
         recs.append((
-            f"Priorité n°2 — {a2['label']}",
-            f"Score actuel {a2['current_pct']:.0f}% (rang {a2['user_rank']}/{a2['total']}). "
-            f"{a2['density_5pct']} concurrent(s) proches au-dessus de toi. "
-            f"Effort pour +10 places : {a2['improvement_pct']:.1f}%. "
-            f"Bon potentiel avec un travail ciblé."
+            f"Priorité n°1 — {a['label']} (gain rapide de points)",
+            f"{a['density_5pct']} concurrent(s) se trouvent dans un écart de 5% "
+            f"juste au-dessus de toi (rang {a['user_rank']}/{a['total']}, score {a['current_pct']:.0f}%). "
+            f"Avec seulement {a['improvement_pct']:.1f}% d'amélioration, tu gagnerais ~10 places "
+            f"et jusqu'à {gains} points bonus supplémentaires. "
+            f"C'est l'épreuve avec le meilleur retour sur investissement à l'entraînement."
+        ))
+
+        # 3. Priorité 2
+        if len(improvable) > 1:
+            a2 = improvable[1]
+            recs.append((
+                f"Priorité n°2 — {a2['label']}",
+                f"Score actuel {a2['current_pct']:.0f}% (rang {a2['user_rank']}/{a2['total']}). "
+                f"{a2['density_5pct']} concurrent(s) proches au-dessus de toi. "
+                f"Effort pour +10 places : {a2['improvement_pct']:.1f}%. "
+                f"Bon potentiel avec un travail ciblé."
+            ))
+    else:
+        recs.append((
+            "Tu es déjà 1er sur toutes les épreuves analysées",
+            "Il n'y a plus de place à gagner dans ta catégorie actuelle : bravo ! "
+            "Pour continuer à te fixer des objectifs, compare-toi à l'ensemble des "
+            "participants (toutes catégories) ou vise une progression sur le temps/la "
+            "distance brute plutôt que sur le classement."
+        ))
+
+    # 2bis. Épreuves déjà en tête — félicitations, pas de recommandation.
+    if firsts:
+        noms = ", ".join(f"{a['label']} ({a['total']} participant(s))" for a in firsts)
+        recs.append((
+            "Déjà 1er de ta catégorie sur : " + ", ".join(a["label"] for a in firsts),
+            f"Sur {noms}, tu es en tête de ta catégorie : aucune place à gagner n'est "
+            f"possible ici, il n'y a donc pas de recommandation de progression à "
+            f"proposer sur ces épreuves. Bravo !"
         ))
 
     # 4. Profil athlétique (endurance vs explosivité)
@@ -546,6 +585,9 @@ def _draw_info_card(fig, x0, card_y, w, card_h,
     if improvement_pct is not None and improvement_pct > 0:
         ax.text(cx, y, f"Effort +10 places : {improvement_pct:.1f}%",
                 ha="center", va="top", fontsize=7.5, color=C["text_light"])
+    elif user_rank == 1:
+        ax.text(cx, y, "\U0001F3C6 1er de la cat\u00e9gorie",
+                ha="center", va="top", fontsize=7.5, color=C["battus"])
     elif improvement_pct == 0:
         ax.text(cx, y, "\u2714 Deja dans le top 10",
                 ha="center", va="top", fontsize=7.5, color=C["battus"])
@@ -756,62 +798,105 @@ def _draw_curve(ax, rows, nom_lower, label, event_type):
                 color=C["text_light"], transform=ax.transAxes)
         return
 
+    user_idx = next(
+        (i for i, row in enumerate(rows) if nom_lower and row[1].lower() == nom_lower),
+        None,
+    )
+    user_val = parse_result(rows[user_idx][3]) if user_idx is not None else None
+
     # ── Filtre outliers ──────────────────────────────────────────────────────
     # Cutoff = user_result ± gap×CHART_OUTLIER_GAP_FACTOR, gap = |user - leader|
     n_filtered = 0
-    if nom_lower and CHART_OUTLIER_GAP_FACTOR is not None and event_type is not None:
-        user_val = next(
-            (parse_result(row[3]) for row in rows if row[1].lower() == nom_lower),
-            None,
-        )
-        if user_val is not None:
-            is_dist = (event_type == "distance")
-            all_y   = [yi for _, yi in valid]
-            best    = max(all_y) if is_dist else min(all_y)
-            gap     = abs(user_val - best)
-            if gap > 0:
-                margin = gap * CHART_OUTLIER_GAP_FACTOR
-                if is_dist:
-                    cutoff = user_val - margin    # exclure < cutoff
-                    filtered = [(xi, yi) for xi, yi in valid if yi >= cutoff]
-                else:
-                    cutoff = user_val + margin    # exclure > cutoff
-                    filtered = [(xi, yi) for xi, yi in valid if yi <= cutoff]
-                n_filtered = len(valid) - len(filtered)
-                if n_filtered > 0:
-                    valid = filtered
+    if user_val is not None and CHART_OUTLIER_GAP_FACTOR is not None and event_type is not None:
+        is_dist = (event_type == "distance")
+        all_y   = [yi for _, yi in valid]
+        best    = max(all_y) if is_dist else min(all_y)
+        gap     = abs(user_val - best)
+        if gap > 0:
+            margin = gap * CHART_OUTLIER_GAP_FACTOR
+            if is_dist:
+                cutoff = user_val - margin    # exclure < cutoff
+                filtered = [(xi, yi) for xi, yi in valid if yi >= cutoff]
+            else:
+                cutoff = user_val + margin    # exclure > cutoff
+                filtered = [(xi, yi) for xi, yi in valid if yi <= cutoff]
+            n_filtered = len(valid) - len(filtered)
+            if n_filtered > 0:
+                valid = filtered
     # ────────────────────────────────────────────────────────────────────────
 
     xs, ys = zip(*valid)
+
+    # ── Zones de concurrence directe ─────────────────────────────────────────
+    # Rouge : les 10 concurrents les plus proches devant ET derrière.
+    # Orange : extension jusqu'aux 20 concurrents les plus proches devant
+    # (uniquement devant — l'objectif est d'aller chercher des places, pas
+    # de savoir jusqu'où on peut reculer).
+    # Calculées sur `valid` (déjà nettoyé des outliers) et non sur `rows` :
+    # un rang « brut » n'a pas de sens si l'entrée à ce rang est une valeur
+    # aberrante du site source (ex. l'entrée "41h" trouvée sur le 10000m,
+    # déjà exclue de la courbe elle-même par ce même filtre).
+    if user_idx is not None and user_val is not None:
+        user_rank = user_idx + 1
+        j = next((k for k, (xi, _) in enumerate(valid) if xi == user_rank), None)
+        if j is not None:
+            n_valid = len(valid)
+            pos_ahead10, pos_behind10, pos_ahead20 = max(0, j - 10), min(n_valid - 1, j + 10), max(0, j - 20)
+            val_ahead10  = valid[pos_ahead10][1]
+            val_behind10 = valid[pos_behind10][1]
+            val_ahead20  = valid[pos_ahead20][1]
+
+            ax.axhspan(min(val_ahead10, val_behind10), max(val_ahead10, val_behind10),
+                       color=C["user_dot"], alpha=0.10, zorder=1,
+                       label="Concurrence directe (±10 places)")
+            if pos_ahead20 < pos_ahead10:  # sinon identique à la zone rouge, inutile
+                ax.axhspan(min(val_ahead20, val_ahead10), max(val_ahead20, val_ahead10),
+                           color="#E87722", alpha=0.12, zorder=1,
+                           label="Extension (11 à 20 places devant)")
+
+            # Étiquette d'allure/500m sur chacune des 3 lignes de référence.
+            # x en coordonnées d'axes (0-1) mais y en coordonnées de données,
+            # pour rester collé au bord droit quel que soit le nombre de rangs.
+            for value, color, tag in [
+                (val_behind10, C["user_dot"], "10ᵉ derrière"),
+                (val_ahead10, C["user_dot"], "10ᵉ devant"),
+                (val_ahead20, "#E87722", "20ᵉ devant"),
+            ]:
+                p = _pace_from_value(label, value)
+                if p is None:
+                    continue
+                ax.text(0.985, value, f"{tag} : {int(p // 60)}:{p % 60:04.1f}/500m",
+                        transform=ax.get_yaxis_transform(),
+                        fontsize=6.5, color=color, fontweight="bold",
+                        ha="right", va="center", zorder=4,
+                        bbox=dict(boxstyle="round,pad=0.15", fc="white",
+                                  ec=color, alpha=0.85, lw=0.6))
+    # ────────────────────────────────────────────────────────────────────────
 
     # Ligne + tous les points
     ax.plot(xs, ys, color=C["curve"], linewidth=1.2, alpha=0.45, zorder=2)
     ax.scatter(xs, ys, color=C["dot"], s=22, alpha=0.65, zorder=3, label="Participants")
 
     # Point rouge utilisateur
-    if nom_lower:
-        for i, row in enumerate(rows, 1):
-            if row[1].lower() == nom_lower:
-                uy = parse_result(row[3])
-                if uy is not None:
-                    ax.scatter([i], [uy], color=C["user_dot"], s=90, zorder=5,
-                               edgecolors="white", linewidths=1.2, label="Vous")
-                    ax.axvline(i, color=C["user_dot"], linestyle="--",
-                               alpha=0.35, linewidth=1)
-                    # Annotation avec décalage intelligent
-                    y_range = max(ys) - min(ys) if max(ys) != min(ys) else 1
-                    x_frac = i / len(rows)
-                    xytext = (-55, 6) if x_frac > 0.75 else (8, 6)
-                    ax.annotate(
-                        f" #{i} — {row[3]} ",
-                        (i, uy), xytext=xytext,
-                        textcoords="offset points",
-                        fontsize=8, fontweight="bold", color=C["user_dot"],
-                        bbox=dict(boxstyle="round,pad=0.3", fc="white",
-                                  ec=C["user_dot"], alpha=0.9, lw=0.8),
-                        arrowprops=dict(arrowstyle="-", color=C["user_dot"],
-                                        lw=0.8, alpha=0.7),
-                    )
+    if user_idx is not None and user_val is not None:
+        i = user_idx + 1
+        ax.scatter([i], [user_val], color=C["user_dot"], s=90, zorder=5,
+                   edgecolors="white", linewidths=1.2, label="Vous")
+        ax.axvline(i, color=C["user_dot"], linestyle="--",
+                   alpha=0.35, linewidth=1)
+        # Annotation avec décalage intelligent
+        x_frac = i / len(rows)
+        xytext = (-55, 6) if x_frac > 0.75 else (8, 6)
+        ax.annotate(
+            f" #{i} — {rows[user_idx][3]} ",
+            (i, user_val), xytext=xytext,
+            textcoords="offset points",
+            fontsize=8, fontweight="bold", color=C["user_dot"],
+            bbox=dict(boxstyle="round,pad=0.3", fc="white",
+                      ec=C["user_dot"], alpha=0.9, lw=0.8),
+            arrowprops=dict(arrowstyle="-", color=C["user_dot"],
+                            lw=0.8, alpha=0.7),
+        )
 
     ylabel = "Distance (m)" if event_type == "distance" else "Temps (s)"
     if event_type == "time":
@@ -1020,8 +1105,16 @@ def create_opportunities_page(analysis, nom, categorie, date_str):
 
     ax_tab = fig.add_axes([0.04, 0.55, 0.92, 0.33])
     opp_rows = []
-    for rank_i, a in enumerate(analysis, 1):
-        priority = {1: "1re priorité", 2: "2e priorité", 3: "3e priorité"}.get(rank_i, "")
+    highlights = set()
+    priority_rank = 0  # ne compte que les épreuves réellement améliorables
+    for row_i, a in enumerate(analysis, 1):
+        if a.get("is_first"):
+            priority = "Déjà 1er"
+        else:
+            priority_rank += 1
+            priority = {1: "1re priorité", 2: "2e priorité", 3: "3e priorité"}.get(priority_rank, "")
+            if priority_rank <= 2:
+                highlights.add(row_i)
         opp_rows.append([
             a["label"],
             f"{a['current_pct']:.0f}%",
@@ -1030,7 +1123,6 @@ def create_opportunities_page(analysis, nom, categorie, date_str):
             f"{a['improvement_pct']:.1f}%",
             priority,
         ])
-    highlights = {1, 2} if len(analysis) > 1 else {1}
     draw_table(
         ax_tab,
         col_labels=["Épreuve", "Score %", "Points", "Conc. à <5%", "Effort +10 places", "Priorité"],
@@ -1094,6 +1186,121 @@ def create_recommendations_page(analysis, nom, categorie, date_str):
             fig.text(MARGIN_L + 0.012, y, line, fontsize=8.5, color=C["text"], va="top")
             y -= 0.020
         y -= 0.012
+
+    return fig
+
+
+# ── Page prédictions Machine Learning ────────────────────────────────────────
+
+def compute_ml_predictions(analysis):
+    """
+    Construit les prédictions ML pour toutes les épreuves EVENT_ORDER, à
+    partir des scores % déjà calculés par compute_analysis() (mêmes % que
+    ceux utilisés pour l'entraînement, cf. ml/01_prepare_data.py).
+
+    Retourne None si le fichier de modèles n'a pas été généré (l'appli doit
+    continuer à fonctionner normalement sans cette page dans ce cas).
+    """
+    if not predict_ml.is_available():
+        return None
+
+    known_scores = {a["label"]: a["current_pct"] for a in analysis}
+    profile = predict_ml.predict_profile(known_scores)
+
+    rows = []
+    for label in EVENT_ORDER:
+        pred = predict_ml.predict_expected_score(known_scores, label)
+        if pred is None:
+            continue
+        reel = known_scores.get(label)
+        ecart = (reel - pred["predicted"]) if reel is not None else None
+        if reel is None:
+            note = "Épreuve non tentée — estimation"
+        elif abs(ecart) > pred["mae"]:
+            note = "Écart au-delà de la marge d'erreur du modèle"
+        else:
+            note = "Dans la marge d'erreur normale"
+        rows.append({
+            "label": label,
+            "reel": reel,
+            "predicted": pred["predicted"],
+            "mae": pred["mae"],
+            "ecart": ecart,
+            "note": note,
+        })
+
+    return {"profile": profile, "rows": rows, "info": predict_ml.model_info()}
+
+
+def create_ml_predictions_page(nom, categorie, date_str, ml_result):
+    """
+    Page : pour chaque épreuve, compare le score réel (s'il existe) au
+    score attendu d'après un modèle de régression entraîné sur les autres
+    athlètes — et donne un profil (explosif/endurant) détecté par
+    clustering (K-means), sans aucune règle écrite à la main.
+
+    Important : ceci compare des athlètes ENTRE EUX à un instant donné.
+    Il n'y a aucune notion de progression dans le temps — ce n'est pas une
+    prédiction de performance future, seulement un signal statistique
+    relatif au profil actuel de l'athlète.
+    """
+    fig = plt.figure(figsize=(8.27, 11.69))
+    fig.patch.set_facecolor(C["bg"])
+    subtitle = "  ·  ".join(filter(None, [nom, categorie, date_str]))
+    add_banner(fig, "Prédictions Machine Learning", subtitle)
+    add_footer(fig, f"Modèle entraîné sur {ml_result['info']['n_athletes']} athlètes   ·   {date_str}")
+
+    if not ml_result["rows"]:
+        fig.text(0.5, 0.5, "Données insuffisantes pour une prédiction ML.",
+                 ha="center", va="center", fontsize=12, color=C["text_light"])
+        return fig
+
+    profile = ml_result["profile"]
+    if profile:
+        from matplotlib.patches import Rectangle
+        rect = Rectangle((MARGIN_L, 0.865), MARGIN_R - MARGIN_L, 0.035,
+                          transform=fig.transFigure, facecolor=C["banner_bg"],
+                          edgecolor="none", clip_on=False, zorder=1)
+        fig.add_artist(rect)
+        fig.text(MARGIN_L + (MARGIN_R - MARGIN_L) / 2, 0.865 + 0.0175,
+                 f"Profil détecté par Machine Learning : {profile['label']}",
+                 ha="center", va="center", fontsize=10, fontweight="bold",
+                 color="white", zorder=2)
+        fig.text(MARGIN_L, 0.852, "Détecté par clustering (K-means) sur l'ensemble des athlètes, "
+                 "sans seuil ni règle écrite à la main.",
+                 fontsize=7.5, color=C["text_light"], va="top")
+
+    fig.text(MARGIN_L, 0.812, "Score réel vs score attendu par épreuve",
+             fontsize=10.5, fontweight="bold", color=C["banner_bg"], va="top")
+
+    ax_tab = fig.add_axes([MARGIN_L, 0.36, MARGIN_R - MARGIN_L, 0.435])
+    t_rows = []
+    for r in ml_result["rows"]:
+        reel_str = f"{r['reel']:.0f}%" if r["reel"] is not None else "-"
+        ecart_str = f"{r['ecart']:+.0f} pts" if r["ecart"] is not None else "-"
+        t_rows.append([
+            r["label"], reel_str, f"{r['predicted']:.0f}% (± {r['mae']:.0f})",
+            ecart_str, r["note"],
+        ])
+    draw_table(
+        ax_tab,
+        col_labels=["Épreuve", "Score réel", "Score attendu (ML)", "Écart", "Lecture"],
+        rows=t_rows,
+        col_widths=[0.14, 0.14, 0.22, 0.13, 0.37],
+        fontsize=7.5,
+    )
+
+    y = 0.335
+    disclaimer = (
+        "Ces prédictions comparent ton profil à celui d'autres athlètes ayant obtenu des "
+        "résultats similaires sur les autres épreuves — c'est une comparaison statistique entre "
+        "athlètes à un instant donné, pas une prédiction de progression dans le temps ni une "
+        "garantie de résultat. Un écart n'est à considérer que s'il dépasse la marge d'erreur "
+        "(± indiquée) propre à chaque épreuve."
+    )
+    for line in textwrap.wrap(disclaimer, width=WRAP[9]):
+        fig.text(MARGIN_L, y, line, fontsize=8, color=C["text_light"], va="top", style="italic")
+        y -= 0.020
 
     return fig
 
@@ -1416,18 +1623,63 @@ DIST_EV_PACE = {"100 m": 100, "500 m": 500, "1000 m": 1000,
 TIME_EV_PACE = {"1 min": 60, "4 min": 240, "30 min": 1800, "60 min": 3600}
 
 
-def create_pace_curve_page(event_data, nom, nom_lower, categorie, date_str):
-    """Page : courbe d'allure au 500m par épreuve pour un participant."""
+def _pace_from_value(label, val):
+    """Convertit un résultat brut (temps ou distance) en allure/500m."""
+    if label in DIST_EV_PACE:
+        return val / DIST_EV_PACE[label] * 500
+    if label in TIME_EV_PACE:
+        if not val or val <= 0:
+            return None  # distance nulle/aberrante (ex. DNF) → diviserait par ~0
+        return TIME_EV_PACE[label] / val * 500
+    return None
+
+
+def _clip_relative(value, reference, min_ratio=0.7, max_ratio=1.35):
+    """
+    Borne une valeur de zone (allure, temps, distance...) par rapport à une
+    valeur de référence (typiquement le résultat réel de l'utilisateur).
+    Sans ça, un seul concurrent aberrant (ex. distance quasi nulle sur une
+    épreuve à durée fixe, ou un temps mal saisi sur le site source) fait
+    exploser l'échelle de tout le graphique — même logique que
+    CHART_OUTLIER_GAP_FACTOR ailleurs.
+    """
+    if value is None or reference is None:
+        return value
+    return min(max(value, reference * min_ratio), reference * max_ratio)
+
+
+def create_pace_curve_page(event_data, nom, nom_lower, categorie, date_str, analysis=None):
+    """
+    Page : courbe d'allure au 500m par épreuve pour un participant, avec
+    deux zones optionnelles :
+    - "concurrence directe" : allure du 10ème devant / 10ème derrière dans
+      le classement, pour visualiser l'effort nécessaire pour gagner ou le
+      risque de perdre 10 places.
+    - "20ème devant" : une ligne plus claire, objectif plus ambitieux que la
+      zone ci-dessus (on ne s'intéresse ici qu'à ce qui est devant, pas à
+      ce qui suit).
+    - "performance attendue (ML)" : plage [score prédit - marge d'erreur,
+      score prédit + marge d'erreur] du modèle de régression (cf.
+      predict_ml.py), pour situer l'athlète dans le haut ou le bas de ce
+      qu'on attendrait statistiquement de son profil.
+    """
     import matplotlib.ticker as mticker
     from matplotlib.lines import Line2D
 
-    # Calcul des allures
-    points = []
+    known_scores = {a["label"]: a["current_pct"] for a in (analysis or [])}
+    ml_ready = predict_ml.is_available()
+
+    # Calcul des allures + des zones, épreuve par épreuve
+    points = []       # (dist_m, pace_s, label, etype)
+    zone_rank10 = {}  # label -> (pace_10eme_devant, pace_10eme_derriere)
+    zone_rank20 = {}  # label -> pace_20eme_devant
+    zone_ml = {}      # label -> (pace_borne_haute, pace_borne_basse)
+
     for label, rows in event_data.items():
-        user_result = None
-        for row in rows:
+        user_result, user_idx = None, None
+        for i, row in enumerate(rows):
             if nom_lower and row[1].lower() == nom_lower:
-                user_result = row[3]
+                user_result, user_idx = row[3], i
                 break
         if user_result is None:
             continue
@@ -1435,16 +1687,51 @@ def create_pace_curve_page(event_data, nom, nom_lower, categorie, date_str):
         if not val:
             continue
         if label in DIST_EV_PACE:
-            dist_m = DIST_EV_PACE[label]
-            pace_s = val / dist_m * 500
-            etype = "dist"
+            dist_m, etype = DIST_EV_PACE[label], "dist"
         elif label in TIME_EV_PACE:
-            dist_m = val
-            pace_s = TIME_EV_PACE[label] / dist_m * 500
-            etype = "time"
+            dist_m, etype = val, "time"
         else:
             continue
-        points.append((dist_m, pace_s, label, etype))
+        user_pace = _pace_from_value(label, val)
+        if user_pace is None:
+            continue
+        points.append((dist_m, user_pace, label, etype))
+
+        total, user_rank = len(rows), user_idx + 1
+
+        # Zone "concurrence directe" : 10ème devant / 10ème derrière.
+        rank_ahead  = max(1, user_rank - 10)
+        rank_behind = min(total, user_rank + 10)
+        val_ahead  = parse_result(rows[rank_ahead - 1][3])
+        val_behind = parse_result(rows[rank_behind - 1][3])
+        pace_ahead  = _clip_relative(_pace_from_value(label, val_ahead), user_pace) if val_ahead else None
+        pace_behind = _clip_relative(_pace_from_value(label, val_behind), user_pace) if val_behind else None
+        if pace_ahead is not None and pace_behind is not None:
+            zone_rank10[label] = (pace_ahead, pace_behind)
+
+        # Ligne "20ème devant" : objectif plus lointain, uniquement devant.
+        rank_ahead20 = max(1, user_rank - 20)
+        if rank_ahead20 < rank_ahead:  # sinon identique au 10ème devant, inutile
+            val_ahead20 = parse_result(rows[rank_ahead20 - 1][3])
+            pace_ahead20 = _clip_relative(_pace_from_value(label, val_ahead20), user_pace) if val_ahead20 else None
+            if pace_ahead20 is not None:
+                zone_rank20[label] = pace_ahead20
+
+        # Zone "performance attendue" : score prédit ± marge d'erreur (ML),
+        # traduit en rang puis en allure via le résultat réel à ce rang.
+        if ml_ready and label in known_scores:
+            pred = predict_ml.predict_expected_score(known_scores, label)
+            if pred:
+                score_hi = min(100.0, pred["predicted"] + pred["mae"])
+                score_lo = max(0.0, pred["predicted"] - pred["mae"])
+                rank_hi = min(total, max(1, round(total * (1 - score_hi / 100))))
+                rank_lo = min(total, max(1, round(total * (1 - score_lo / 100))))
+                val_hi = parse_result(rows[rank_hi - 1][3])
+                val_lo = parse_result(rows[rank_lo - 1][3])
+                pace_hi = _clip_relative(_pace_from_value(label, val_hi), user_pace) if val_hi else None
+                pace_lo = _clip_relative(_pace_from_value(label, val_lo), user_pace) if val_lo else None
+                if pace_hi is not None and pace_lo is not None:
+                    zone_ml[label] = (pace_hi, pace_lo)
 
     points.sort(key=lambda p: p[0])
 
@@ -1468,12 +1755,37 @@ def create_pace_curve_page(event_data, nom, nom_lower, categorie, date_str):
 
     xs = [p[0] for p in points]
     ys = [p[1] for p in points]
+    labels_sorted = [p[2] for p in points]
 
     # Ligne de connexion
     ax.plot(xs, ys, color=C["rang"], linewidth=1.8, alpha=0.55, zorder=2, linestyle="--")
 
     # Zone de fond entre la courbe et le bas du graphe
     ax.fill_between(xs, ys, max(ys) * 1.05, alpha=0.07, color=C["rang"], zorder=1)
+
+    # Zone "performance attendue (ML)" — bleu, sous la ligne de concurrence
+    has_ml_zone = any(l in zone_ml for l in labels_sorted)
+    if has_ml_zone:
+        y_hi = [zone_ml[l][0] if l in zone_ml else y for l, y in zip(labels_sorted, ys)]
+        y_lo = [zone_ml[l][1] if l in zone_ml else y for l, y in zip(labels_sorted, ys)]
+        ax.fill_between(xs, y_hi, y_lo, color=C["rang"], alpha=0.16, zorder=1.3,
+                         edgecolor="none")
+
+    # Zone "concurrence directe (±10 places)" — vert, comme "battus" ailleurs
+    has_rank10_zone = any(l in zone_rank10 for l in labels_sorted)
+    if has_rank10_zone:
+        y_ahead  = [zone_rank10[l][0] if l in zone_rank10 else y for l, y in zip(labels_sorted, ys)]
+        y_behind = [zone_rank10[l][1] if l in zone_rank10 else y for l, y in zip(labels_sorted, ys)]
+        ax.fill_between(xs, y_ahead, y_behind, color=C["battus"], alpha=0.18, zorder=1.6,
+                         edgecolor="none")
+
+    # Ligne "20ème devant" — objectif plus ambitieux, vert clair, devant uniquement
+    has_rank20_line = any(l in zone_rank20 for l in labels_sorted)
+    if has_rank20_line:
+        y_ahead20 = [zone_rank20.get(l, np.nan) for l in labels_sorted]
+        ax.plot(xs, y_ahead20, color=C["battus"], alpha=0.65, linewidth=1.3,
+                linestyle=":", marker="o", markersize=4, markerfacecolor="white",
+                markeredgewidth=1.0, zorder=1.8)
 
     # Points + annotations
     offsets_y = []
@@ -1542,12 +1854,26 @@ def create_pace_curve_page(event_data, nom, nom_lower, categorie, date_str):
                markeredgecolor="white", markeredgewidth=0.8, markersize=8,
                label="Épreuve durée fixe (dist. variable)"),
     ]
-    ax.legend(handles=legend_handles, fontsize=8, loc="lower left",
+    if has_ml_zone:
+        legend_handles.append(mpatches.Patch(
+            facecolor=C["rang"], alpha=0.35, label="Performance attendue (ML, ± marge d'erreur)"))
+    if has_rank10_zone:
+        legend_handles.append(mpatches.Patch(
+            facecolor=C["battus"], alpha=0.4, label="Concurrence directe (10ᵉ devant / 10ᵉ derrière)"))
+    if has_rank20_line:
+        legend_handles.append(Line2D(
+            [0], [0], color=C["battus"], alpha=0.65, linewidth=1.3, linestyle=":",
+            marker="o", markersize=4, markerfacecolor="white", markeredgewidth=1.0,
+            label="20ᵉ devant (objectif plus ambitieux)"))
+    ax.legend(handles=legend_handles, fontsize=7.5, loc="lower left",
               framealpha=0.92, edgecolor=C["border"])
 
     # Note explicative
-    fig.text(0.5, 0.108, "Plus haut = plus rapide   ·   Abscisse en échelle logarithmique",
-             ha="center", va="top", fontsize=7.5, color=C["text_light"], style="italic")
+    note = "Plus haut = plus rapide   ·   Abscisse en échelle logarithmique"
+    if has_ml_zone or has_rank10_zone:
+        note += "\nZones : bleu = plage statistique attendue selon ton profil · vert = tes concurrents directs au classement"
+    fig.text(0.5, 0.108, note, ha="center", va="top", fontsize=7.5,
+             color=C["text_light"], style="italic")
 
     return fig
 
@@ -1569,7 +1895,8 @@ def generate_pdf(output_file, summary_rows, event_data, nom, nom_lower, categori
     # Analyse pré-calculée pour alimenter les pages d'épreuves
     analysis          = compute_analysis(event_data, nom_lower) if nom_lower else []
     event_analysis_map = {a["label"]: a for a in analysis}
-    priority_map       = {a["label"]: i for i, a in enumerate(analysis, 1) if i <= 3}
+    improvable_sorted  = [a for a in analysis if not a["is_first"]]
+    priority_map       = {a["label"]: i for i, a in enumerate(improvable_sorted, 1) if i <= 3}
 
     with PdfPages(output_file) as pdf:
         print("  Page de garde...")
@@ -1584,7 +1911,7 @@ def generate_pdf(output_file, summary_rows, event_data, nom, nom_lower, categori
 
         if nom_lower:
             print("  Courbe d'allure au 500 m...")
-            fig = create_pace_curve_page(event_data, nom, nom_lower, categorie, date_str)
+            fig = create_pace_curve_page(event_data, nom, nom_lower, categorie, date_str, analysis=analysis)
             pdf.savefig(fig, bbox_inches="tight", dpi=150)
             plt.close(fig)
 
@@ -1609,6 +1936,12 @@ def generate_pdf(output_file, summary_rows, event_data, nom, nom_lower, categori
             pdf.savefig(fig, bbox_inches="tight", dpi=150)
             plt.close(fig)
 
+            ml_result = compute_ml_predictions(analysis)
+            if ml_result:
+                print("  Prédictions Machine Learning...")
+                fig = create_ml_predictions_page(nom, categorie, date_str, ml_result)
+                pdf.savefig(fig, bbox_inches="tight", dpi=150)
+                plt.close(fig)
 
         # Métadonnées PDF
         d = pdf.infodict()
@@ -1617,7 +1950,8 @@ def generate_pdf(output_file, summary_rows, event_data, nom, nom_lower, categori
         d["Subject"] = f"Classements C7DC — {categorie or 'toutes catégories'}"
         d["Creator"] = "scrape_classement.py"
 
-    n_pages = 2 + len(event_data) + (3 if nom_lower else 0)  # courbe allure + opportunités + préconisations
+    n_ml_page = 1 if (nom_lower and predict_ml.is_available()) else 0
+    n_pages = 2 + len(event_data) + (3 if nom_lower else 0) + n_ml_page  # courbe allure + opportunités + préconisations + ML
     print(f"\nFichier PDF généré : {output_file}  ({n_pages} pages)")
 
 

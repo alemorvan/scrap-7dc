@@ -13,9 +13,10 @@ Application web et outil CLI pour scraper les classements du [Challenge des 7 D�
 - Recherche d'un participant par nom ou par club
 - Génération de rapport PDF personnalisé :
   - Page de garde et résumé des classements toutes épreuves
-  - Courbe d'allure au 500 m (comparaison inter-épreuves)
-  - Page détaillée par épreuve (graphique + tableau avec allure /500 m)
+  - Courbe d'allure au 500 m (comparaison inter-épreuves), avec zone de performance attendue (Machine Learning) et zone de concurrence directe
+  - Page détaillée par épreuve (graphique + tableau avec allure /500 m), avec zones de concurrence directe (±10 places) et d'extension (11 à 20 places devant)
   - Tableau des opportunités et préconisations d'entraînement
+  - Page de prédictions Machine Learning (profil explosif/endurant détecté par clustering, score attendu par épreuve)
 - Cache local JSON avec TTL configurable (pas de scraping superflu)
 - Page de maintenance automatique pendant le démarrage
 
@@ -121,6 +122,96 @@ ghcr.io/alemorvan/crap-7dc:latest
 | **Render** | 750 h/mois, sleep après 15 min | Simple, GitHub natif |
 | **Fly.io** | 3 VMs 256 Mo, toujours actif | Pas de sleep |
 | **Railway** | $5 de crédit/mois | Très simple mais payant |
+
+---
+
+## Machine Learning — profils et prédictions
+
+Le rapport PDF intègre des prédictions statistiques entraînées sur l'ensemble des
+résultats scrapés (pas du deep learning à proprement parler : du Machine Learning
+classique — clustering + régression linéaire — largement suffisant vu la taille et
+la nature des données).
+
+### Ce que ça fait
+
+- **Profil athlétique (clustering K-means)** : détecte automatiquement si un
+  athlète est plutôt "Explosif" (fort sur les épreuves courtes) ou "Endurant"
+  (fort sur les épreuves longues), sans seuil écrit à la main — contrairement au
+  profil rule-based existant (`_detect_profile`).
+- **Score attendu par épreuve (régression linéaire)** : pour chaque épreuve,
+  prédit le score % qu'un athlète devrait obtenir à partir de ses résultats sur
+  les 9 autres épreuves. Permet :
+  - d'estimer un score sur une épreuve **jamais tentée** ;
+  - de repérer un écart entre score réel et score attendu (signal d'opportunité
+    statistique, en complément du tableau des opportunités existant).
+- Ces prédictions alimentent la page "Prédictions Machine Learning" du PDF, ainsi
+  que les zones affichées sur la courbe d'allure et les pages par épreuve.
+
+**Important** : ce sont des comparaisons statistiques entre athlètes à un instant
+donné (un seul scrape) — pas une prédiction de progression dans le temps, et pas
+une garantie de résultat.
+
+### Architecture : entraînement (dev) vs inférence (prod)
+
+Le projet sépare volontairement les deux, pour ne pas alourdir l'image Docker de
+production :
+
+| | Entraînement | Inférence |
+|---|---|---|
+| Dossier | `ml/` | racine du projet (`predict_ml.py`) |
+| Dépendances | `pandas`, `scikit-learn` (`ml/requirements-ml.txt`) | aucune (stdlib `json`/`math` uniquement) |
+| Où ça tourne | Jamais en production, uniquement en local/dev | Dans l'appli Flask/CLI, à chaque génération de PDF |
+| Entrée | Un snapshot JSON scrapé (`ml/data/*.json`) | `models/c7dc_model_params.json` |
+| Sortie | `models/c7dc_model_params.json` (~8 Ko) | Prédictions (score attendu, profil) |
+
+`scikit-learn`/`pandas` n'apparaissent pas dans `requirements.txt` ni dans le
+`Dockerfile` : seul `models/c7dc_model_params.json` (quelques Ko de coefficients
+et centres de clusters) est copié dans l'image, et `predict_ml.py` réapplique les
+formules à la main (produit scalaire, distance au centre le plus proche).
+
+### Mettre à jour le modèle
+
+Le modèle **ne se réentraîne jamais tout seul**. Il faut le régénérer manuellement
+à chaque fois qu'on veut qu'il apprenne de nouvelles données (plus de
+participants, une nouvelle saison…) :
+
+```bash
+# 1. Installer les dépendances ML (une fois, dans le venv de dev)
+source venv/bin/activate
+pip install -r ml/requirements-ml.txt
+
+# 2. Récupérer un snapshot frais de toutes les épreuves
+python scrape_classement.py          # génère classements.json à la racine
+cp classements.json ml/data/classements_$(date +%F).json
+
+# 3. Mettre à jour DATA_FILE dans ml/01_prepare_data.py et ml/04_export_for_production.py
+#    pour pointer vers ce nouveau fichier
+
+# 4. Reconstruire le dataset d'entraînement
+python ml/01_prepare_data.py
+
+# 5. (Optionnel) Explorer clustering et régression, vérifier que les métriques
+#    (silhouette, MAE) restent raisonnables
+python ml/02_clustering.py
+python ml/03_supervised_regression.py
+
+# 6. Exporter les modèles finaux pour la production
+python ml/04_export_for_production.py   # régénère models/c7dc_model_params.json
+```
+
+Puis committer `models/c7dc_model_params.json` et redéployer (rebuild de l'image
+Docker) — c'est ce fichier, et lui seul, que la production utilise.
+
+### Fichiers concernés
+
+| Fichier | Rôle |
+|---|---|
+| `ml/01_prepare_data.py` | JSON scrapé → tableau de features (score % par athlète × épreuve) |
+| `ml/02_clustering.py` | Exploration + clustering K-means (profils) |
+| `ml/03_supervised_regression.py` | Exploration + régression (score attendu) |
+| `ml/04_export_for_production.py` | Entraînement final + export JSON léger |
+| `models/c7dc_model_params.json` | Paramètres des modèles, utilisés en production |
+| `predict_ml.py` | Inférence en production (aucune dépendance ML) |
 
 ---
 

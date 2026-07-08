@@ -14,8 +14,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Code de l'application
-COPY scrape_classement.py generate_pdf.py app.py ./
+COPY scrape_classement.py generate_pdf.py app.py predict_ml.py ./
 COPY templates/ templates/
+COPY models/ models/
 
 # Répertoires de travail
 RUN mkdir -p /tmp/c7dc_pdfs /app/cache
