@@ -6,6 +6,12 @@ Application web et outil CLI pour scraper les classements du [Challenge des 7 D�
 
 [![Licence: CC BY-SA 4.0](https://img.shields.io/badge/Licence-CC%20BY--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-sa/4.0/)
 
+## Démo
+
+**[https://scrap-7dc.onrender.com](https://scrap-7dc.onrender.com)**
+
+> ⏳ Hébergée sur le tier gratuit de Render : le service se met en veille après 15 min d'inactivité. Au premier accès après une veille, **le chargement peut prendre 30 secondes à 1 minute** — la page de maintenance affiche l'avancement automatiquement, il suffit de patienter sans recharger la page.
+
 ---
 
 ## Fonctionnalités
