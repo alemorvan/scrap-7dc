@@ -43,6 +43,36 @@ DOC_TITLE  = "Analyseur de performance C7DC et axes de progression"
 # None = pas de filtre.
 CHART_OUTLIER_GAP_FACTOR = 0.5
 
+# Nombre de concurrents affichés dans les zones de comparaison (pages par
+# épreuve et courbe d'allure), en fonction du rang de l'athlète dans le
+# classement. Clé = rang maximum pour lequel la ligne s'applique.
+# Valeur = (n_rouge, n_orange) :
+#   - n_rouge  : concurrents devant ET derrière affichés en zone rouge
+#                (concurrence directe).
+#   - n_orange : concurrents devant affichés en zone orange, jusqu'à ce
+#                rang (étend la zone rouge, uniquement devant).
+# Rationale : inutile d'afficher des zones de comparaison à quelqu'un déjà
+# dans les 5 premiers (rien à gagner en places) ; plus le rang est loin
+# derrière, plus la fenêtre de comparaison s'élargit pour rester utile.
+SEUIL_COURBE = {
+    5:  (0, 0),
+    10: (2, 0),
+    20: (4, 0),
+    30: (6, 8),
+    40: (8, 12),
+    50: (10, 16),
+}
+SEUIL_COURBE_DEFAULT = (10, 20)
+
+
+def _seuils_pour_rang(user_rank):
+    """Retourne (n_rouge, n_orange) applicable à ce rang, selon SEUIL_COURBE."""
+    for seuil in sorted(SEUIL_COURBE):
+        if user_rank <= seuil:
+            return SEUIL_COURBE[seuil]
+    return SEUIL_COURBE_DEFAULT
+
+
 EXTRA_LABELS = {
     "Printemps", "Été", "Automne", "Hiver",
     "21097 m", "42195 m",
@@ -249,7 +279,8 @@ def compute_analysis(event_data, nom_lower):
     Pour chaque épreuve, calcule :
       - score % actuel, points actuels
       - densité : concurrents dans un écart de 5% juste devant l'utilisateur
-      - amélioration % nécessaire pour gagner 10 places
+      - amélioration % nécessaire pour gagner jusqu'à 10 places (moins si
+        moins de 10 concurrents devant, cf. places_gain)
       - score d'opportunité ajusté par la difficulté relative de l'épreuve
     Retourne la liste triée par opportunité décroissante.
     """
@@ -289,9 +320,13 @@ def compute_analysis(event_data, nom_lower):
         else:
             density_5 = sum(1 for v in above_vals if v >= user_val * 0.95)
 
-        # Amélioration % nécessaire pour gagner 10 places
-        target_rank = max(1, user_rank - 10)
-        target_val  = next((v for r, v in ranked if r == target_rank), None)
+        # Amélioration % nécessaire pour gagner jusqu'à 10 places. Le gain
+        # réel est plafonné par le nombre de concurrents devant (impossible
+        # de gagner 10 places si on est déjà 4ᵉ, par exemple) — d'où
+        # places_gain, à afficher partout à la place du "10" en dur.
+        target_rank  = max(1, user_rank - 10)
+        places_gain  = user_rank - target_rank
+        target_val   = next((v for r, v in ranked if r == target_rank), None)
         if target_val:
             if is_dist:
                 improvement_pct = max(0.0, (target_val - user_val) / user_val * 100)
@@ -329,6 +364,7 @@ def compute_analysis(event_data, nom_lower):
             "current_points":  current_points,
             "density_5pct":    density_5,
             "improvement_pct": improvement_pct,
+            "places_gain":     places_gain,
             "opportunity":     opp,
             "is_first":        is_first,
         })
@@ -367,8 +403,8 @@ def _build_recs(analysis, total_points):
             f"Priorité n°1 — {a['label']} (gain rapide de points)",
             f"{a['density_5pct']} concurrent(s) se trouvent dans un écart de 5% "
             f"juste au-dessus de toi (rang {a['user_rank']}/{a['total']}, score {a['current_pct']:.0f}%). "
-            f"Avec seulement {a['improvement_pct']:.1f}% d'amélioration, tu gagnerais ~10 places "
-            f"et jusqu'à {gains} points bonus supplémentaires. "
+            f"Avec seulement {a['improvement_pct']:.1f}% d'amélioration, tu gagnerais "
+            f"jusqu'à {a['places_gain']} place(s) et {gains} points bonus supplémentaires. "
             f"C'est l'épreuve avec le meilleur retour sur investissement à l'entraînement."
         ))
 
@@ -379,7 +415,7 @@ def _build_recs(analysis, total_points):
                 f"Priorité n°2 — {a2['label']}",
                 f"Score actuel {a2['current_pct']:.0f}% (rang {a2['user_rank']}/{a2['total']}). "
                 f"{a2['density_5pct']} concurrent(s) proches au-dessus de toi. "
-                f"Effort pour +10 places : {a2['improvement_pct']:.1f}%. "
+                f"Effort pour +{a2['places_gain']} place(s) : {a2['improvement_pct']:.1f}%. "
                 f"Bon potentiel avec un travail ciblé."
             ))
     else:
@@ -527,7 +563,8 @@ def _format_gap_to_first(rows, user_rank, event_type):
 
 
 def _draw_info_card(fig, x0, card_y, w, card_h,
-                    user_rank, total, pct, gap_str, improvement_pct, priority_rank):
+                    user_rank, total, pct, gap_str, improvement_pct, priority_rank,
+                    places_gain=None):
     """Carte d info colonne unique : rang, %, ecart, effort + badge pill au-dessus."""
     from matplotlib.patches import FancyBboxPatch
 
@@ -583,7 +620,8 @@ def _draw_info_card(fig, x0, card_y, w, card_h,
         y -= 0.22
 
     if improvement_pct is not None and improvement_pct > 0:
-        ax.text(cx, y, f"Effort +10 places : {improvement_pct:.1f}%",
+        gain_str = f"+{places_gain} place(s)" if places_gain else "Effort"
+        ax.text(cx, y, f"{gain_str} : {improvement_pct:.1f}%",
                 ha="center", va="top", fontsize=7.5, color=C["text_light"])
     elif user_rank == 1:
         ax.text(cx, y, "\U0001F3C6 1er de la cat\u00e9gorie",
@@ -593,7 +631,8 @@ def _draw_info_card(fig, x0, card_y, w, card_h,
                 ha="center", va="top", fontsize=7.5, color=C["battus"])
 
 
-def draw_table(ax, col_labels, rows, highlight_rows=None, col_widths=None, fontsize=7.5):
+def draw_table(ax, col_labels, rows, highlight_rows=None, col_widths=None, fontsize=7.5,
+               row_scale=1.55):
     """Table matplotlib stylisée sur un axes."""
     ax.axis("off")
     if not rows:
@@ -614,7 +653,7 @@ def draw_table(ax, col_labels, rows, highlight_rows=None, col_widths=None, fonts
     )
     table.auto_set_font_size(False)
     table.set_fontsize(fontsize)
-    table.scale(1.0, 1.55)
+    table.scale(1.0, row_scale)
 
     for (r, c), cell in table.get_celld().items():
         cell.set_edgecolor(C["border"])
@@ -657,16 +696,22 @@ def create_summary_page(summary_rows, nom, categorie, date_str):
     ax_tab = fig.add_axes([0.04, 0.04, 0.43, 0.865])
     t_rows, highlights = [], set()
     for i, (epr, cat_rank, cat_total, resultat, is_nom) in enumerate(summary_rows, 1):
-        rank_str = f"{cat_rank}/{cat_total}" if cat_rank != "-" else f"-/{cat_total}"
-        pct_str  = f"{(cat_total - cat_rank) / cat_total * 100:.0f}%" if cat_rank != "-" else "-"
-        t_rows.append([epr, rank_str, pct_str, resultat])
+        if cat_rank != "-":
+            pct = (cat_total - cat_rank) / cat_total * 100
+            rank_str = f"{cat_rank}/{cat_total} ({pct:.0f}%)"
+        else:
+            rank_str = f"-/{cat_total}"
+        val = parse_result(resultat)
+        pace = _pace_from_value(epr, val) if val else None
+        pace_str = f"{int(pace // 60)}:{pace % 60:04.1f}" if pace is not None else "-"
+        t_rows.append([epr, rank_str, resultat, pace_str])
         if is_nom:
             highlights.add(i)
     draw_table(ax_tab,
-               col_labels=["Épreuve", "Classement", "%", "Résultat"],
+               col_labels=["Épreuve", "Classement", "Résultat", "Allure"],
                rows=t_rows,
                highlight_rows=highlights,
-               col_widths=[0.36, 0.22, 0.16, 0.26],
+               col_widths=[0.30, 0.27, 0.23, 0.20],
                fontsize=8)
 
     # --- Jauge horizontale (droite) ---
@@ -777,6 +822,7 @@ def create_event_page(label, rows, nom_lower, categorie, date_str,
     if user_rank:
         gap_str         = _format_gap_to_first(rows, user_rank, event_type)
         improvement_pct = event_analysis["improvement_pct"] if event_analysis else None
+        places_gain     = event_analysis["places_gain"] if event_analysis else None
         _draw_info_card(
             fig,
             x0=0.63, card_y=card_y, w=0.35, card_h=card_h,
@@ -784,6 +830,7 @@ def create_event_page(label, rows, nom_lower, categorie, date_str,
             gap_str=gap_str,
             improvement_pct=improvement_pct,
             priority_rank=priority_rank,
+            places_gain=places_gain,
         )
 
     return fig
@@ -828,47 +875,55 @@ def _draw_curve(ax, rows, nom_lower, label, event_type):
     xs, ys = zip(*valid)
 
     # ── Zones de concurrence directe ─────────────────────────────────────────
-    # Rouge : les 10 concurrents les plus proches devant ET derrière.
-    # Orange : extension jusqu'aux 20 concurrents les plus proches devant
-    # (uniquement devant — l'objectif est d'aller chercher des places, pas
-    # de savoir jusqu'où on peut reculer).
+    # Rouge : les n_rouge concurrents les plus proches devant ET derrière.
+    # Orange : extension jusqu'aux n_orange concurrents les plus proches
+    # devant (uniquement devant — l'objectif est d'aller chercher des places,
+    # pas de savoir jusqu'où on peut reculer).
+    # n_rouge/n_orange dépendent du rang (SEUIL_COURBE) : pas de zone du tout
+    # si déjà dans les 5 premiers, fenêtre plus large au fur et à mesure
+    # qu'on descend dans le classement.
     # Calculées sur `valid` (déjà nettoyé des outliers) et non sur `rows` :
     # un rang « brut » n'a pas de sens si l'entrée à ce rang est une valeur
     # aberrante du site source (ex. l'entrée "41h" trouvée sur le 10000m,
     # déjà exclue de la courbe elle-même par ce même filtre).
     if user_idx is not None and user_val is not None:
         user_rank = user_idx + 1
+        n_rouge, n_orange = _seuils_pour_rang(user_rank)
         j = next((k for k, (xi, _) in enumerate(valid) if xi == user_rank), None)
-        if j is not None:
+        if j is not None and n_rouge > 0:
             n_valid = len(valid)
-            pos_ahead10, pos_behind10, pos_ahead20 = max(0, j - 10), min(n_valid - 1, j + 10), max(0, j - 20)
-            val_ahead10  = valid[pos_ahead10][1]
-            val_behind10 = valid[pos_behind10][1]
-            val_ahead20  = valid[pos_ahead20][1]
+            pos_ahead_r, pos_behind_r = max(0, j - n_rouge), min(n_valid - 1, j + n_rouge)
+            pos_ahead_o = max(0, j - n_orange) if n_orange > 0 else pos_ahead_r
+            val_ahead_r  = valid[pos_ahead_r][1]
+            val_behind_r = valid[pos_behind_r][1]
+            val_ahead_o  = valid[pos_ahead_o][1]
 
-            ax.axhspan(min(val_ahead10, val_behind10), max(val_ahead10, val_behind10),
+            ax.axhspan(min(val_ahead_r, val_behind_r), max(val_ahead_r, val_behind_r),
                        color=C["user_dot"], alpha=0.10, zorder=1,
-                       label="Concurrence directe (±10 places)")
-            if pos_ahead20 < pos_ahead10:  # sinon identique à la zone rouge, inutile
-                ax.axhspan(min(val_ahead20, val_ahead10), max(val_ahead20, val_ahead10),
+                       label=f"Concurrence directe (±{n_rouge} places)")
+            if pos_ahead_o < pos_ahead_r:  # sinon identique à la zone rouge, inutile
+                ax.axhspan(min(val_ahead_o, val_ahead_r), max(val_ahead_o, val_ahead_r),
                            color="#E87722", alpha=0.12, zorder=1,
-                           label="Extension (11 à 20 places devant)")
+                           label=f"Extension ({n_rouge + 1} à {n_orange} places devant)")
 
-            # Étiquette d'allure/500m sur chacune des 3 lignes de référence.
+            # Étiquette d'allure/500m sur chacune des lignes de référence.
             # x en coordonnées d'axes (0-1) mais y en coordonnées de données,
             # pour rester collé au bord droit quel que soit le nombre de rangs.
-            for value, color, tag in [
-                (val_behind10, C["user_dot"], "10ᵉ derrière"),
-                (val_ahead10, C["user_dot"], "10ᵉ devant"),
-                (val_ahead20, "#E87722", "20ᵉ devant"),
-            ]:
+            labels_zones = [(val_behind_r, C["user_dot"], f"{n_rouge}ᵉ derrière"),
+                            (val_ahead_r, C["user_dot"], f"{n_rouge}ᵉ devant")]
+            if pos_ahead_o < pos_ahead_r:
+                labels_zones.append((val_ahead_o, "#E87722", f"{n_orange}ᵉ devant"))
+            # Ancré à gauche (et non à droite) : la légende occupe toujours un
+            # coin droit (upper right / lower right selon event_type), un
+            # ancrage à droite finissait caché derrière sa boîte opaque.
+            for value, color, tag in labels_zones:
                 p = _pace_from_value(label, value)
                 if p is None:
                     continue
-                ax.text(0.985, value, f"{tag} : {int(p // 60)}:{p % 60:04.1f}/500m",
+                ax.text(0.015, value, f"{tag} : {int(p // 60)}:{p % 60:04.1f}/500m",
                         transform=ax.get_yaxis_transform(),
                         fontsize=6.5, color=color, fontweight="bold",
-                        ha="right", va="center", zorder=4,
+                        ha="left", va="center", zorder=4,
                         bbox=dict(boxstyle="round,pad=0.15", fc="white",
                                   ec=color, alpha=0.85, lw=0.6))
     # ────────────────────────────────────────────────────────────────────────
@@ -887,8 +942,10 @@ def _draw_curve(ax, rows, nom_lower, label, event_type):
         # Annotation avec décalage intelligent
         x_frac = i / len(rows)
         xytext = (-55, 6) if x_frac > 0.75 else (8, 6)
+        pace = _pace_from_value(label, user_val)
+        pace_str = f" ({int(pace // 60)}:{pace % 60:04.1f})" if pace is not None else ""
         ax.annotate(
-            f" #{i} — {rows[user_idx][3]} ",
+            f" #{i} — {rows[user_idx][3]}{pace_str} ",
             (i, user_val), xytext=xytext,
             textcoords="offset points",
             fontsize=8, fontweight="bold", color=C["user_dot"],
@@ -1115,17 +1172,19 @@ def create_opportunities_page(analysis, nom, categorie, date_str):
             priority = {1: "1re priorité", 2: "2e priorité", 3: "3e priorité"}.get(priority_rank, "")
             if priority_rank <= 2:
                 highlights.add(row_i)
+        gain = a["places_gain"]
+        effort_str = f"{a['improvement_pct']:.1f}% (+{gain} pl.)" if gain else f"{a['improvement_pct']:.1f}%"
         opp_rows.append([
             a["label"],
             f"{a['current_pct']:.0f}%",
             f"{a['current_points']} pts",
             str(a["density_5pct"]),
-            f"{a['improvement_pct']:.1f}%",
+            effort_str,
             priority,
         ])
     draw_table(
         ax_tab,
-        col_labels=["Épreuve", "Score %", "Points", "Conc. à <5%", "Effort +10 places", "Priorité"],
+        col_labels=["Épreuve", "Score %", "Points", "Conc. à <5%", "Effort progression", "Priorité"],
         rows=opp_rows,
         highlight_rows=highlights,
         col_widths=[0.17, 0.11, 0.12, 0.15, 0.20, 0.25],
@@ -1135,18 +1194,19 @@ def create_opportunities_page(analysis, nom, categorie, date_str):
     # Légende explicative
     y = 0.535
     legends = [
-        ("Score %",          "Ton pourcentage relatif dans la catégorie (100% = meilleur)."),
-        ("Points",           "Points bonus actuels (total - rang)."),
-        ("Conc. à <5%",      "Nombre de concurrents dans les 5% qui te précèdent directement."),
-        ("Effort +10 places","Amélioration de résultat nécessaire pour gagner 10 places."),
-        ("Priorité",         "Classement de rentabilité : densité × facilité de progression."),
+        ("Score %",           "Ton pourcentage relatif dans la catégorie (100% = meilleur)."),
+        ("Points",            "Points bonus actuels (total - rang)."),
+        ("Conc. à <5%",       "Nombre de concurrents dans les 5% qui te précèdent directement."),
+        ("Effort progression","Amélioration de résultat nécessaire, et nombre de places gagnées "
+                               "(plafonné à 10, moins si tu es déjà proche du sommet)."),
+        ("Priorité",          "Classement de rentabilité : densité × facilité de progression."),
     ]
     for label_l, desc in legends:
         if y < 0.04:
             break
         fig.text(0.04, y, f"• {label_l} :", fontsize=8, fontweight="bold",
                  color=C["banner_bg"], va="top")
-        fig.text(0.20, y, desc, fontsize=8, color=C["text"], va="top")
+        fig.text(0.26, y, desc, fontsize=8, color=C["text"], va="top")
         y -= 0.022
 
     return fig
@@ -1216,8 +1276,13 @@ def compute_ml_predictions(analysis):
         ecart = (reel - pred["predicted"]) if reel is not None else None
         if reel is None:
             note = "Épreuve non tentée — estimation"
-        elif abs(ecart) > pred["mae"]:
-            note = "Écart au-delà de la marge d'erreur du modèle"
+        elif ecart > pred["mae"]:
+            note = ("Tu dépasses le seuil attendu du modèle : bravo, tu fais mieux sur "
+                     "cette épreuve que les autres athlètes de ton profil !")
+        elif ecart < -pred["mae"]:
+            note = ("Tu fais moins bien qu'attendu par le modèle et par les autres "
+                     "athlètes de ton profil sur cette épreuve : tu dois pouvoir "
+                     "progresser ici.")
         else:
             note = "Dans la marge d'erreur normale"
         rows.append({
@@ -1278,16 +1343,18 @@ def create_ml_predictions_page(nom, categorie, date_str, ml_result):
     for r in ml_result["rows"]:
         reel_str = f"{r['reel']:.0f}%" if r["reel"] is not None else "-"
         ecart_str = f"{r['ecart']:+.0f} pts" if r["ecart"] is not None else "-"
+        note_wrapped = "\n".join(textwrap.wrap(r["note"], width=42))
         t_rows.append([
             r["label"], reel_str, f"{r['predicted']:.0f}% (± {r['mae']:.0f})",
-            ecart_str, r["note"],
+            ecart_str, note_wrapped,
         ])
     draw_table(
         ax_tab,
         col_labels=["Épreuve", "Score réel", "Score attendu (ML)", "Écart", "Lecture"],
         rows=t_rows,
-        col_widths=[0.14, 0.14, 0.22, 0.13, 0.37],
+        col_widths=[0.12, 0.12, 0.19, 0.11, 0.46],
         fontsize=7.5,
+        row_scale=2.7,
     )
 
     y = 0.335
@@ -1652,12 +1719,14 @@ def create_pace_curve_page(event_data, nom, nom_lower, categorie, date_str, anal
     """
     Page : courbe d'allure au 500m par épreuve pour un participant, avec
     deux zones optionnelles :
-    - "concurrence directe" : allure du 10ème devant / 10ème derrière dans
-      le classement, pour visualiser l'effort nécessaire pour gagner ou le
-      risque de perdre 10 places.
-    - "20ème devant" : une ligne plus claire, objectif plus ambitieux que la
-      zone ci-dessus (on ne s'intéresse ici qu'à ce qui est devant, pas à
-      ce qui suit).
+    - "concurrence directe" (rouge) : allure du n_rouge-ème devant / n_rouge-ème
+      derrière dans le classement, pour visualiser l'effort nécessaire pour
+      gagner ou le risque de perdre des places. n_rouge dépend du rang de
+      l'athlète sur chaque épreuve (SEUIL_COURBE) — aucune zone si déjà dans
+      les 5 premiers.
+    - "extension devant" (orange) : une ligne plus claire jusqu'au n_orange-ème
+      devant, objectif plus ambitieux que la zone rouge (on ne s'intéresse ici
+      qu'à ce qui est devant, pas à ce qui suit).
     - "performance attendue (ML)" : plage [score prédit - marge d'erreur,
       score prédit + marge d'erreur] du modèle de régression (cf.
       predict_ml.py), pour situer l'athlète dans le haut ou le bas de ce
@@ -1698,24 +1767,27 @@ def create_pace_curve_page(event_data, nom, nom_lower, categorie, date_str, anal
         points.append((dist_m, user_pace, label, etype))
 
         total, user_rank = len(rows), user_idx + 1
+        n_rouge, n_orange = _seuils_pour_rang(user_rank)
 
-        # Zone "concurrence directe" : 10ème devant / 10ème derrière.
-        rank_ahead  = max(1, user_rank - 10)
-        rank_behind = min(total, user_rank + 10)
-        val_ahead  = parse_result(rows[rank_ahead - 1][3])
-        val_behind = parse_result(rows[rank_behind - 1][3])
-        pace_ahead  = _clip_relative(_pace_from_value(label, val_ahead), user_pace) if val_ahead else None
-        pace_behind = _clip_relative(_pace_from_value(label, val_behind), user_pace) if val_behind else None
-        if pace_ahead is not None and pace_behind is not None:
-            zone_rank10[label] = (pace_ahead, pace_behind)
+        # Zone "concurrence directe" : n_rouge devant / n_rouge derrière.
+        if n_rouge > 0:
+            rank_ahead  = max(1, user_rank - n_rouge)
+            rank_behind = min(total, user_rank + n_rouge)
+            val_ahead  = parse_result(rows[rank_ahead - 1][3])
+            val_behind = parse_result(rows[rank_behind - 1][3])
+            pace_ahead  = _clip_relative(_pace_from_value(label, val_ahead), user_pace) if val_ahead else None
+            pace_behind = _clip_relative(_pace_from_value(label, val_behind), user_pace) if val_behind else None
+            if pace_ahead is not None and pace_behind is not None:
+                zone_rank10[label] = (pace_ahead, pace_behind)
 
-        # Ligne "20ème devant" : objectif plus lointain, uniquement devant.
-        rank_ahead20 = max(1, user_rank - 20)
-        if rank_ahead20 < rank_ahead:  # sinon identique au 10ème devant, inutile
-            val_ahead20 = parse_result(rows[rank_ahead20 - 1][3])
-            pace_ahead20 = _clip_relative(_pace_from_value(label, val_ahead20), user_pace) if val_ahead20 else None
-            if pace_ahead20 is not None:
-                zone_rank20[label] = pace_ahead20
+            # Ligne "n_orange devant" : objectif plus lointain, uniquement devant.
+            if n_orange > 0:
+                rank_ahead20 = max(1, user_rank - n_orange)
+                if rank_ahead20 < rank_ahead:  # sinon identique à la zone rouge, inutile
+                    val_ahead20 = parse_result(rows[rank_ahead20 - 1][3])
+                    pace_ahead20 = _clip_relative(_pace_from_value(label, val_ahead20), user_pace) if val_ahead20 else None
+                    if pace_ahead20 is not None:
+                        zone_rank20[label] = pace_ahead20
 
         # Zone "performance attendue" : score prédit ± marge d'erreur (ML),
         # traduit en rang puis en allure via le résultat réel à ce rang.
@@ -1771,19 +1843,21 @@ def create_pace_curve_page(event_data, nom, nom_lower, categorie, date_str, anal
         ax.fill_between(xs, y_hi, y_lo, color=C["rang"], alpha=0.16, zorder=1.3,
                          edgecolor="none")
 
-    # Zone "concurrence directe (±10 places)" — vert, comme "battus" ailleurs
+    # Zone "concurrence directe" — rouge, comme sur les pages par épreuve.
+    # Le nombre de concurrents affichés dépend du rang sur chaque épreuve
+    # (SEUIL_COURBE) : pas de zone du tout si déjà dans les 5 premiers.
     has_rank10_zone = any(l in zone_rank10 for l in labels_sorted)
     if has_rank10_zone:
         y_ahead  = [zone_rank10[l][0] if l in zone_rank10 else y for l, y in zip(labels_sorted, ys)]
         y_behind = [zone_rank10[l][1] if l in zone_rank10 else y for l, y in zip(labels_sorted, ys)]
-        ax.fill_between(xs, y_ahead, y_behind, color=C["battus"], alpha=0.18, zorder=1.6,
+        ax.fill_between(xs, y_ahead, y_behind, color=C["user_dot"], alpha=0.14, zorder=1.6,
                          edgecolor="none")
 
-    # Ligne "20ème devant" — objectif plus ambitieux, vert clair, devant uniquement
+    # Ligne "extension devant" — orange, objectif plus ambitieux, devant uniquement
     has_rank20_line = any(l in zone_rank20 for l in labels_sorted)
     if has_rank20_line:
         y_ahead20 = [zone_rank20.get(l, np.nan) for l in labels_sorted]
-        ax.plot(xs, y_ahead20, color=C["battus"], alpha=0.65, linewidth=1.3,
+        ax.plot(xs, y_ahead20, color="#E87722", alpha=0.75, linewidth=1.3,
                 linestyle=":", marker="o", markersize=4, markerfacecolor="white",
                 markeredgewidth=1.0, zorder=1.8)
 
@@ -1859,19 +1933,19 @@ def create_pace_curve_page(event_data, nom, nom_lower, categorie, date_str, anal
             facecolor=C["rang"], alpha=0.35, label="Performance attendue (ML, ± marge d'erreur)"))
     if has_rank10_zone:
         legend_handles.append(mpatches.Patch(
-            facecolor=C["battus"], alpha=0.4, label="Concurrence directe (10ᵉ devant / 10ᵉ derrière)"))
+            facecolor=C["user_dot"], alpha=0.35, label="Concurrence directe (selon ton rang)"))
     if has_rank20_line:
         legend_handles.append(Line2D(
-            [0], [0], color=C["battus"], alpha=0.65, linewidth=1.3, linestyle=":",
+            [0], [0], color="#E87722", alpha=0.75, linewidth=1.3, linestyle=":",
             marker="o", markersize=4, markerfacecolor="white", markeredgewidth=1.0,
-            label="20ᵉ devant (objectif plus ambitieux)"))
+            label="Extension devant (objectif plus ambitieux)"))
     ax.legend(handles=legend_handles, fontsize=7.5, loc="lower left",
               framealpha=0.92, edgecolor=C["border"])
 
     # Note explicative
     note = "Plus haut = plus rapide   ·   Abscisse en échelle logarithmique"
     if has_ml_zone or has_rank10_zone:
-        note += "\nZones : bleu = plage statistique attendue selon ton profil · vert = tes concurrents directs au classement"
+        note += "\nZones : bleu = plage statistique attendue selon ton profil · rouge/orange = tes concurrents directs au classement"
     fig.text(0.5, 0.108, note, ha="center", va="top", fontsize=7.5,
              color=C["text_light"], style="italic")
 
